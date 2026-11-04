@@ -36,6 +36,10 @@ public class MainActivity extends Activity {
     private static final String TYPE_INT_RANGE = "INT Range";
     private static final String TYPE_FLOAT_RANGE = "Float Range";
 
+    // ── Limits ───────────────────────────────────────────────────────
+    private static final int MAX_RANGE_ITEMS = 10000;
+    private static final long MAX_UINT32 = 0xFFFFFFFFL;
+
     // ── ARM фиксированные слова ──────────────────────────────────────
     // ARM32 BX LR
     private static final byte[] ARM32_BX_LR = {0x1E, (byte) 0xFF, 0x2F, (byte) 0xE1};
@@ -49,9 +53,15 @@ public class MainActivity extends Activity {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(32, 32, 32, 32);
+        root.setPadding(dp(16), dp(16), dp(16), dp(16));
         root.setBackgroundColor(Color.WHITE);
-        setContentView(root);
+
+        ScrollView outer = new ScrollView(this);
+        outer.setFillViewport(true);
+        outer.setBackgroundColor(Color.WHITE);
+        outer.addView(root, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        setContentView(outer);
 
         // Заголовок Telegram
         TextView credit = new TextView(this);
@@ -60,15 +70,15 @@ public class MainActivity extends Activity {
         credit.setTextColor(Color.BLACK);
         credit.setBackground(makeRoundedBg(Color.parseColor("#E0E0E0")));
         credit.setTypeface(null, Typeface.BOLD);
-        credit.setPadding(24, 16, 24, 16);
+        credit.setPadding(dp(12), dp(8), dp(12), dp(8));
         root.addView(credit);
-        addSpace(root, 12);
+        addSpace(root, 8);
 
         // Группа архитектуры
         LinearLayout archBox = new LinearLayout(this);
         archBox.setOrientation(LinearLayout.VERTICAL);
         archBox.setBackground(makeRoundedBg(Color.parseColor("#E0E0E0")));
-        archBox.setPadding(16, 8, 16, 8);
+        archBox.setPadding(dp(8), dp(4), dp(8), dp(4));
 
         archGroup = new RadioGroup(this);
         archGroup.setOrientation(LinearLayout.VERTICAL);
@@ -88,12 +98,12 @@ public class MainActivity extends Activity {
         archGroup.check(arm32Id);
         archBox.addView(archGroup);
         root.addView(archBox);
-        addSpace(root, 12);
+        addSpace(root, 8);
 
         // Спиннер типа
         LinearLayout spinnerBox = new LinearLayout(this);
         spinnerBox.setBackground(makeRoundedBg(Color.parseColor("#E0E0E0")));
-        spinnerBox.setPadding(16, 8, 16, 8);
+        spinnerBox.setPadding(dp(8), dp(4), dp(8), dp(4));
 
         typeSpinner = new Spinner(this);
 
@@ -111,13 +121,13 @@ public class MainActivity extends Activity {
 
         spinnerBox.addView(typeSpinner);
         root.addView(spinnerBox);
-        addSpace(root, 12);
+        addSpace(root, 8);
 
         // Одиночный ввод
         singleInputLayout = new LinearLayout(this);
         singleInputLayout.setOrientation(LinearLayout.VERTICAL);
         singleInputLayout.setBackground(makeRoundedBg(Color.parseColor("#E0E0E0")));
-        singleInputLayout.setPadding(16, 8, 16, 8);
+        singleInputLayout.setPadding(dp(8), dp(4), dp(8), dp(4));
         inputValue = makeEditText("Enter value");
         singleInputLayout.addView(inputValue);
         root.addView(singleInputLayout);
@@ -127,7 +137,7 @@ public class MainActivity extends Activity {
         rangeInputLayout.setOrientation(LinearLayout.VERTICAL);
         rangeInputLayout.setVisibility(View.GONE);
         rangeInputLayout.setBackground(makeRoundedBg(Color.parseColor("#E0E0E0")));
-        rangeInputLayout.setPadding(16, 8, 16, 8);
+        rangeInputLayout.setPadding(dp(8), dp(4), dp(8), dp(4));
         startValue = makeEditText("Start value");
         endValue = makeEditText("End value");
         stepValue = makeEditText("Step size");
@@ -135,7 +145,7 @@ public class MainActivity extends Activity {
         rangeInputLayout.addView(endValue);
         rangeInputLayout.addView(stepValue);
         root.addView(rangeInputLayout);
-        addSpace(root, 12);
+        addSpace(root, 8);
 
         // Кнопка Convert
         LinearLayout btnBox = new LinearLayout(this);
@@ -151,14 +161,15 @@ public class MainActivity extends Activity {
         convertBtn.setOnClickListener(v -> convert());
         btnBox.addView(convertBtn);
         root.addView(btnBox);
-        addSpace(root, 12);
+        addSpace(root, 8);
 
         // Результат
         LinearLayout resultBox = new LinearLayout(this);
         resultBox.setBackground(makeRoundedBg(Color.parseColor("#E0E0E0")));
-        resultBox.setPadding(16, 16, 16, 16);
+        resultBox.setPadding(dp(8), dp(8), dp(8), dp(8));
         LinearLayout.LayoutParams resultBoxLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
         resultBox.setLayoutParams(resultBoxLp);
+        resultBox.setMinimumHeight(dp(160));
 
         ScrollView scroll = new ScrollView(this);
         scroll.setLayoutParams(
@@ -170,7 +181,7 @@ public class MainActivity extends Activity {
         scroll.addView(resultText);
         resultBox.addView(scroll);
         root.addView(resultBox);
-        addSpace(root, 12);
+        addSpace(root, 8);
 
         // Кнопка Copy
         LinearLayout copyBox = new LinearLayout(this);
@@ -242,7 +253,7 @@ public class MainActivity extends Activity {
             } else if (type.equals(TYPE_FLOAT)) {
                 throw new Exception("Invalid float value");
             } else if (type.equals(TYPE_BOOLEAN)) {
-                throw new Exception("Invalid boolean value Use 1/true or 0/false");
+                throw new Exception("Invalid boolean value. Use 1/true or 0/false");
             } else {
                 throw new Exception("Empty value");
             }
@@ -255,7 +266,7 @@ public class MainActivity extends Activity {
                 case TYPE_INT:
                     long ival = Long.parseLong(raw);
 
-                    if (!is64 && (ival < Integer.MIN_VALUE || ival > Integer.MAX_VALUE)) {
+                    if (!is64 && (ival < Integer.MIN_VALUE || ival > MAX_UINT32)) {
                         throw new Exception("Invalid integer value");
                     }
 
@@ -263,22 +274,13 @@ public class MainActivity extends Activity {
                     break;
 
                 case TYPE_FLOAT:
-                    double dval = Double.parseDouble(raw);
+                    float fval = (float) Double.parseDouble(raw);
 
-                    if (is64) {
-                        if (!Double.isFinite(dval)) {
-                            throw new Exception("Invalid float value");
-                        }
-                        bytes = arm64Double(dval);
-                    } else {
-                        float fval = (float) dval;
-
-                        if (Float.isInfinite(fval)) {
-                            throw new Exception("Invalid float value");
-                        }
-
-                        bytes = arm32Float(fval);
+                    if (Float.isNaN(fval) || Float.isInfinite(fval)) {
+                        throw new Exception("Invalid float value");
                     }
+
+                    bytes = is64 ? arm64Float(fval) : arm32Float(fval);
                     break;
 
                 case TYPE_BOOLEAN:
@@ -336,6 +338,12 @@ public class MainActivity extends Activity {
             throw new Exception("Step size must be greater than 0");
         }
 
+        BigDecimal count = bdEnd.subtract(bdStart).divideToIntegralValue(bdStep).add(BigDecimal.ONE);
+
+        if (count.compareTo(BigDecimal.valueOf(MAX_RANGE_ITEMS)) > 0) {
+            throw new Exception("Range too large (max " + MAX_RANGE_ITEMS + " entries)");
+        }
+
         boolean isFloat = type.equals(TYPE_FLOAT_RANGE);
 
         for (BigDecimal cur = bdStart; cur.compareTo(bdEnd) <= 0; cur = cur.add(bdStep)) {
@@ -346,14 +354,25 @@ public class MainActivity extends Activity {
 
                 if (isFloat) {
 
-                    double d = cur.doubleValue();
-                    bytes = is64 ? arm64Double(d) : arm32Float((float) d);
+                    float f = (float) cur.doubleValue();
+
+                    if (Float.isNaN(f) || Float.isInfinite(f)) {
+                        throw new Exception("Invalid float value");
+                    }
+
+                    bytes = is64 ? arm64Float(f) : arm32Float(f);
 
                 } else {
 
-                    long v = cur.longValueExact();
+                    long v;
 
-                    if (!is64 && (v < Integer.MIN_VALUE || v > Integer.MAX_VALUE)) {
+                    try {
+                        v = cur.longValueExact();
+                    } catch (ArithmeticException ex) {
+                        throw new Exception("Not a whole number");
+                    }
+
+                    if (!is64 && (v < Integer.MIN_VALUE || v > MAX_UINT32)) {
                         throw new Exception("Invalid integer value");
                     }
 
@@ -372,13 +391,13 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ── ARM32 INT: AND R0,R0,#val ; BX LR ───────────────────────────
+    // ── ARM32 INT: MOV R0,#imm ; BX LR (или MOVW+MOVT если imm не кодируется) ──
     private byte[] arm32Int(int value) {
         // Пробуем закодировать как ARM immediate (8-битный imm + rotation)
         int[] enc = encodeArm32Imm(value & 0xFFFFFFFFL);
         if (enc != null) {
             int rot = enc[0], imm8 = enc[1];
-            int instr = 0xE3000000 | (rot << 8) | imm8;
+            int instr = 0xE3A00000 | (rot << 8) | imm8;
             return concat(intToLE(instr), ARM32_BX_LR);
         } else {
             // MOVW + MOVT + BX LR
@@ -425,10 +444,16 @@ public class MainActivity extends Activity {
         return concat(result, ARM64_RET);
     }
 
-    // ── ARM64 Double: MOVZ/MOVK X0 с битами double ; RET ────────────
-    private byte[] arm64Double(double dval) {
-        long bits = Double.doubleToRawLongBits(dval);
-        return arm64Int(bits);
+    // ── ARM64 Float: MOVZ/MOVK W0 ; FMOV S0,W0 ; RET (float 32-bit -> S0) ──
+    private byte[] arm64Float(float fval) {
+        int bits = Float.floatToRawIntBits(fval);
+        int lo = bits & 0xFFFF;
+        int hi = (bits >>> 16) & 0xFFFF;
+        byte[] r = intToLE(0x52800000 | (lo << 5));              // MOVZ W0, #lo
+        if (hi != 0) {
+            r = concat(r, intToLE(0x72A00000 | (hi << 5)));      // MOVK W0, #hi, LSL#16
+        }
+        return concat(r, intToLE(0x1E270000), ARM64_RET);        // FMOV S0, W0 ; RET
     }
 
     // ── Вспомогательные методы ───────────────────────────────────────
@@ -454,7 +479,7 @@ public class MainActivity extends Activity {
             return false;
         }
 
-        throw new Exception("Invalid boolean value Use 1/true or 0/false");
+        throw new Exception("Invalid boolean value. Use 1/true or 0/false");
     }
 
     private byte[] intToLE(int v) {
@@ -496,7 +521,7 @@ public class MainActivity extends Activity {
     private GradientDrawable makeRoundedBg(int color) {
         GradientDrawable gd = new GradientDrawable();
         gd.setShape(GradientDrawable.RECTANGLE);
-        gd.setCornerRadius(24f);
+        gd.setCornerRadius(dp(8));
         gd.setColor(color);
         return gd;
     }
@@ -517,8 +542,12 @@ public class MainActivity extends Activity {
         return et;
     }
 
-    private void addSpace(LinearLayout parent, int dp) {
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private void addSpace(LinearLayout parent, int dpValue) {
         View v = new View(this);
-        parent.addView(v, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp));
+        parent.addView(v, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(dpValue)));
     }
 }
