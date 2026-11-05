@@ -13,6 +13,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.*;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 
 public class MainActivity extends Activity {
 
@@ -245,64 +246,24 @@ public class MainActivity extends Activity {
     }
 
     private void handleSingle(boolean is64, String type, StringBuilder sb) throws Exception {
-        String raw = inputValue.getText().toString().trim();
-
-        if (raw.isEmpty()) {
-            if (type.equals(TYPE_INT)) {
-                throw new Exception("Invalid integer value");
-            } else if (type.equals(TYPE_FLOAT)) {
-                throw new Exception("Invalid float value");
-            } else if (type.equals(TYPE_BOOLEAN)) {
-                throw new Exception("Invalid boolean value. Use 1/true or 0/false");
-            } else {
-                throw new Exception("Empty value");
-            }
-        }
-
+        String raw = cleanInput(inputValue.getText().toString());
         byte[] bytes;
 
-        try {
-            switch (type) {
-                case TYPE_INT:
-                    long ival = Long.parseLong(raw);
+        switch (type) {
+            case TYPE_INT:
+                bytes = encodeInt(parseIntegerInput(raw), is64);
+                break;
 
-                    if (!is64 && (ival < Integer.MIN_VALUE || ival > MAX_UINT32)) {
-                        throw new Exception("Invalid integer value");
-                    }
+            case TYPE_FLOAT:
+                bytes = encodeFloat(parseFloatInput(raw), is64);
+                break;
 
-                    bytes = is64 ? arm64Int(ival) : arm32Int((int) ival);
-                    break;
+            case TYPE_BOOLEAN:
+                bytes = encodeInt(parseBool(raw) ? BigInteger.ONE : BigInteger.ZERO, is64);
+                break;
 
-                case TYPE_FLOAT:
-                    float fval = (float) Double.parseDouble(raw);
-
-                    if (Float.isNaN(fval) || Float.isInfinite(fval)) {
-                        throw new Exception("Invalid float value");
-                    }
-
-                    bytes = is64 ? arm64Float(fval) : arm32Float(fval);
-                    break;
-
-                case TYPE_BOOLEAN:
-                    boolean bval = parseBool(raw);
-                    bytes = is64 ? arm64Int(bval ? 1L : 0L) : arm32Int(bval ? 1 : 0);
-                    break;
-
-                default:
-                    throw new Exception("Unknown type");
-            }
-
-        } catch (NumberFormatException e) {
-
-            if (type.equals(TYPE_INT)) {
-                throw new Exception("Invalid integer value");
-            }
-
-            if (type.equals(TYPE_FLOAT)) {
-                throw new Exception("Invalid float value");
-            }
-
-            throw new Exception("Invalid value");
+            default:
+                throw new Exception("Unknown type");
         }
 
         sb.append(bytesToHex(bytes));
@@ -354,29 +315,19 @@ public class MainActivity extends Activity {
 
                 if (isFloat) {
 
-                    float f = (float) cur.doubleValue();
-
-                    if (Float.isNaN(f) || Float.isInfinite(f)) {
-                        throw new Exception("Invalid float value");
-                    }
-
-                    bytes = is64 ? arm64Float(f) : arm32Float(f);
+                    bytes = encodeFloat(cur.doubleValue(), is64);
 
                 } else {
 
-                    long v;
+                    BigInteger v;
 
                     try {
-                        v = cur.longValueExact();
+                        v = cur.toBigIntegerExact();
                     } catch (ArithmeticException ex) {
                         throw new Exception("Not a whole number");
                     }
 
-                    if (!is64 && (v < Integer.MIN_VALUE || v > MAX_UINT32)) {
-                        throw new Exception("Invalid integer value");
-                    }
-
-                    bytes = is64 ? arm64Int(v) : arm32Int((int) v);
+                    bytes = encodeInt(v, is64);
                 }
 
                 sb.append(cur.stripTrailingZeros().toPlainString())
@@ -391,33 +342,23 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ── ARM32 INT: MOV R0,#imm ; BX LR (или MOVW+MOVT если imm не кодируется) ──
+    // ── ARM32 INT: MOVW R0,#low16 [; MOVT R0,#high16 if non-zero] ; BX LR ──
     private byte[] arm32Int(int value) {
-        // Пробуем закодировать как ARM immediate (8-битный imm + rotation)
-        int[] enc = encodeArm32Imm(value & 0xFFFFFFFFL);
-        if (enc != null) {
-            int rot = enc[0], imm8 = enc[1];
-            int instr = 0xE3A00000 | (rot << 8) | imm8;
-            return concat(intToLE(instr), ARM32_BX_LR);
-        } else {
-            // MOVW + MOVT + BX LR
-            long uval = value & 0xFFFFFFFFL;
-            int low16 = (int) (uval & 0xFFFF);
-            int high16 = (int) ((uval >> 16) & 0xFFFF);
-            int movw = 0xE3000000 | ((low16 >> 12) << 16) | (low16 & 0xFFF);
+        long uval = value & 0xFFFFFFFFL;
+        int low16 = (int) (uval & 0xFFFF);
+        int high16 = (int) ((uval >> 16) & 0xFFFF);
+        int movw = 0xE3000000 | ((low16 >> 12) << 16) | (low16 & 0xFFF);
+        byte[] result = intToLE(movw);
+        if (high16 != 0) {
             int movt = 0xE3400000 | ((high16 >> 12) << 16) | (high16 & 0xFFF);
-            return concat(intToLE(movw), intToLE(movt), ARM32_BX_LR);
+            result = concat(result, intToLE(movt));
         }
+        return concat(result, ARM32_BX_LR);
     }
 
-    // ── ARM32 Float: MOVW R0,#low; MOVT R0,#high; BX LR ────────────
+    // ── ARM32 Float: single-precision bits via MOVW (+MOVT) R0 ; BX LR ──
     private byte[] arm32Float(float fval) {
-        int bits = Float.floatToRawIntBits(fval);
-        int low16 = bits & 0xFFFF;
-        int high16 = (bits >> 16) & 0xFFFF;
-        int movw = 0xE3000000 | ((low16 >> 12) << 16) | (low16 & 0xFFF);
-        int movt = 0xE3400000 | ((high16 >> 12) << 16) | (high16 & 0xFFF);
-        return concat(intToLE(movw), intToLE(movt), ARM32_BX_LR);
+        return arm32Int(Float.floatToRawIntBits(fval));
     }
 
     // ── ARM64 INT: MOVZ X0,#val [+ MOVK...] ; RET ───────────────────
@@ -444,30 +385,78 @@ public class MainActivity extends Activity {
         return concat(result, ARM64_RET);
     }
 
-    // ── ARM64 Float: MOVZ/MOVK W0 ; FMOV S0,W0 ; RET (float 32-bit -> S0) ──
-    private byte[] arm64Float(float fval) {
-        int bits = Float.floatToRawIntBits(fval);
-        int lo = bits & 0xFFFF;
-        int hi = (bits >>> 16) & 0xFFFF;
-        byte[] r = intToLE(0x52800000 | (lo << 5));              // MOVZ W0, #lo
-        if (hi != 0) {
-            r = concat(r, intToLE(0x72A00000 | (hi << 5)));      // MOVK W0, #hi, LSL#16
-        }
-        return concat(r, intToLE(0x1E270000), ARM64_RET);        // FMOV S0, W0 ; RET
+    // ── ARM64 Float: double (64-bit IEEE-754) bits via MOVZ/MOVK X0 ; RET ──
+    private byte[] arm64Double(double d) {
+        return arm64Int(Double.doubleToRawLongBits(d));
     }
 
     // ── Вспомогательные методы ───────────────────────────────────────
 
-    /** Кодирование ARM32 immediate: возвращает {rotation, imm8} или null */
-    private int[] encodeArm32Imm(long value) {
-        value = value & 0xFFFFFFFFL;
-        for (int ror = 0; ror < 32; ror += 2) {
-            long rotated = ((value << ror) | (value >>> (32 - ror))) & 0xFFFFFFFFL;
-            if (rotated <= 0xFF) {
-                return new int[]{ror / 2, (int) rotated};
-            }
+    /** Same input cleaning as the web tool: max 64 chars, strip zero-width chars, trim. */
+    private String cleanInput(String s) {
+        if (s.length() > 64) {
+            s = s.substring(0, 64);
         }
-        return null;
+        return s.replaceAll("[\\u200B-\\u200D\\uFEFF]", "").trim();
+    }
+
+    /** Integer input: decimal or non-negative hex (0x..), same rules/messages as the web tool. */
+    private BigInteger parseIntegerInput(String t) throws Exception {
+        if (t.isEmpty()) {
+            throw new Exception("Input cannot be empty.");
+        }
+        if (t.matches("(?i)-?0x[0-9a-f]+")) {
+            if (t.startsWith("-")) {
+                throw new Exception("Failed to parse integer.");
+            }
+            return new BigInteger(t.substring(2), 16);
+        }
+        if (t.matches("-?[0-9]+")) {
+            return new BigInteger(t);
+        }
+        throw new Exception("Invalid integer format. Use decimal (e.g. 10) or hex (e.g. 0x0A).");
+    }
+
+    /** Float input parsed like JavaScript Number(): decimal/exponent, 0x/0b/0o forms. */
+    private double parseFloatInput(String t) throws Exception {
+        if (t.isEmpty()) {
+            throw new Exception("Input cannot be empty.");
+        }
+        double d = Double.NaN;
+        if (t.matches("0[xX][0-9a-fA-F]+")) {
+            d = new BigInteger(t.substring(2), 16).doubleValue();
+        } else if (t.matches("0[bB][01]+")) {
+            d = new BigInteger(t.substring(2), 2).doubleValue();
+        } else if (t.matches("0[oO][0-7]+")) {
+            d = new BigInteger(t.substring(2), 8).doubleValue();
+        } else if (t.matches("[+-]?([0-9]+\\.?[0-9]*|\\.[0-9]+)([eE][+-]?[0-9]+)?")) {
+            d = Double.parseDouble(t);
+        }
+        if (Double.isNaN(d) || Double.isInfinite(d)) {
+            throw new Exception("Invalid float value. NaN and Infinity are not allowed.");
+        }
+        return d;
+    }
+
+    private byte[] encodeInt(BigInteger v, boolean is64) throws Exception {
+        if (!is64) {
+            if (v.compareTo(BigInteger.valueOf(Integer.MIN_VALUE)) < 0
+                    || v.compareTo(BigInteger.valueOf(MAX_UINT32)) > 0) {
+                throw new Exception("Value exceeds 32-bit integer range (-2,147,483,648 to 4,294,967,295).");
+            }
+            return arm32Int(v.intValue());
+        }
+        BigInteger min = BigInteger.ONE.shiftLeft(63).negate();
+        BigInteger max = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+        if (v.compareTo(min) < 0 || v.compareTo(max) > 0) {
+            throw new Exception("Value exceeds 64-bit integer range.");
+        }
+        return arm64Int(v.longValue());
+    }
+
+    /** ARM32: IEEE-754 single in R0. ARM64: IEEE-754 double in X0 (same as the web tool). */
+    private byte[] encodeFloat(double d, boolean is64) {
+        return is64 ? arm64Double(d) : arm32Float((float) d);
     }
 
     private boolean parseBool(String raw) throws Exception {
