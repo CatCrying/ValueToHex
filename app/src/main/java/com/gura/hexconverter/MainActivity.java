@@ -84,7 +84,8 @@ public class MainActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     // ── Views ────────────────────────────────────────────────────────
-    private LinearLayout root;
+    private ScrollView outer;
+    private LinearLayout root, outputCard;
     private final LinearLayout[] segments = new LinearLayout[2];
     private final TextView[] segTitle = new TextView[2];
     private final TextView[] segSub = new TextView[2];
@@ -196,7 +197,7 @@ public class MainActivity extends Activity {
         lt.enableTransitionType(LayoutTransition.CHANGING);
         root.setLayoutTransition(lt);
 
-        ScrollView outer = new ScrollView(this);
+        outer = new ScrollView(this);
         outer.setFillViewport(true);
         outer.setVerticalScrollBarEnabled(false);
         outer.setBackgroundColor(cBg);
@@ -204,8 +205,7 @@ public class MainActivity extends Activity {
         setContentView(outer);
 
         buildHeader();
-        buildArchCard();
-        buildTypeCard();
+        buildSettingsCard();
         buildInputCard();
         buildOutputCard();
         buildAsmCard();
@@ -239,7 +239,7 @@ public class MainActivity extends Activity {
         root.addView(header, new LinearLayout.LayoutParams(MATCH, WRAP));
     }
 
-    private void buildArchCard() {
+    private void buildSettingsCard() {
         LinearLayout card = card();
         card.addView(label("ARCHITECTURE"));
 
@@ -253,46 +253,63 @@ public class MainActivity extends Activity {
         for (int i = 0; i < 2; i++) {
             final int idx = i;
             LinearLayout s = new LinearLayout(this);
-            s.setOrientation(LinearLayout.VERTICAL);
+            s.setOrientation(LinearLayout.HORIZONTAL);
             s.setGravity(Gravity.CENTER);
-            s.setPadding(dp(8), dp(10), dp(8), dp(10));
-            TextView t = text(names[i], 16, cText, true);
-            t.setGravity(Gravity.CENTER);
-            TextView st = text(subs[i], 11, cMuted, false);
-            st.setGravity(Gravity.CENTER);
-            s.addView(t);
-            s.addView(st);
+            s.setPadding(dp(8), dp(12), dp(8), dp(12));
+            TextView tt = text(names[i], 16, cText, true);
+            TextView st = text(subs[i], 12, cMuted, false);
+            LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(WRAP, WRAP);
+            slp.leftMargin = dp(8);
+            s.addView(tt);
+            s.addView(st, slp);
             s.setOnClickListener(v -> selectArch(idx == 1, true));
             segments[i] = s;
-            segTitle[i] = t;
+            segTitle[i] = tt;
             segSub[i] = st;
             seg.addView(s, new LinearLayout.LayoutParams(0, WRAP, 1f));
         }
         card.addView(seg, new LinearLayout.LayoutParams(MATCH, WRAP));
-        root.addView(card);
-    }
 
-    private void buildTypeCard() {
-        LinearLayout card = card();
-        card.addView(label("VALUE TYPE"));
+        TextView typeLabel = label("VALUE TYPE");
+        typeLabel.setPadding(0, dp(16), 0, dp(10));
+        card.addView(typeLabel);
 
         HorizontalScrollView hs = new HorizontalScrollView(this);
-        hs.setHorizontalScrollBarEnabled(false);
+        bleed(hs);
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         for (int i = 0; i < TYPES.length; i++) {
-            final String t = TYPES[i];
-            TextView c = chip(t);
-            c.setOnClickListener(v -> selectType(t, true));
+            final String ty = TYPES[i];
+            TextView c = chip(ty);
+            c.setOnClickListener(v -> selectType(ty, true));
             typeChips[i] = c;
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(WRAP, WRAP);
             lp.rightMargin = dp(8);
             row.addView(c, lp);
         }
         hs.addView(row);
-        card.addView(hs, new LinearLayout.LayoutParams(MATCH, WRAP));
+        card.addView(hs, bleedLp(0));
         root.addView(card);
     }
+
+    /** Lets a horizontal chip row scroll all the way to the card edges. */
+    private void bleed(HorizontalScrollView hs) {
+        hs.setHorizontalScrollBarEnabled(false);
+        hs.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        hs.setClipToPadding(false);
+        hs.setPadding(dp(16), 0, dp(16), 0);
+        hs.setHorizontalFadingEdgeEnabled(true);
+        hs.setFadingEdgeLength(dp(24));
+    }
+
+    private LinearLayout.LayoutParams bleedLp(int topMarginDp) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        lp.leftMargin = -dp(16);
+        lp.rightMargin = -dp(16);
+        lp.topMargin = dp(topMarginDp);
+        return lp;
+    }
+
 
     private void buildInputCard() {
         LinearLayout card = card();
@@ -300,7 +317,10 @@ public class MainActivity extends Activity {
 
         // Single value
         inputValue = makeInput("e.g. 1000 or 0x3E8", false);
-        inputValue.addTextChangedListener(new Watcher(this::refresh));
+        inputValue.addTextChangedListener(new Watcher(() -> {
+            refresh();
+            ensureOutputVisible();
+        }));
         card.addView(inputValue, new LinearLayout.LayoutParams(MATCH, WRAP));
 
         // Boolean
@@ -348,13 +368,11 @@ public class MainActivity extends Activity {
         card.addView(helperText, hlp);
 
         quickScroll = new HorizontalScrollView(this);
-        quickScroll.setHorizontalScrollBarEnabled(false);
+        bleed(quickScroll);
         quickRow = new LinearLayout(this);
         quickRow.setOrientation(LinearLayout.HORIZONTAL);
         quickScroll.addView(quickRow);
-        LinearLayout.LayoutParams qlp = new LinearLayout.LayoutParams(MATCH, WRAP);
-        qlp.topMargin = dp(10);
-        card.addView(quickScroll, qlp);
+        card.addView(quickScroll, bleedLp(10));
 
         // Generate (range only)
         generateBtn = text("GENERATE", 15, cOnPrimary, true);
@@ -413,6 +431,7 @@ public class MainActivity extends Activity {
         outputMeta = text("", 12, TERM_MUTED, false);
         out.addView(outputMeta, new LinearLayout.LayoutParams(MATCH, WRAP));
 
+        outputCard = out;
         root.addView(out);
     }
 
@@ -487,24 +506,33 @@ public class MainActivity extends Activity {
         String s;
         switch (type) {
             case TYPE_INT:
-                s = is64
-                        ? "Decimal or hex (0x…) · up to 18,446,744,073,709,551,615 · loaded into X0"
-                        : "Decimal or hex (0x…) · up to 4,294,967,295 · loaded into R0";
+                s = is64 ? "Decimal or 0x hex · loaded into X0" : "Decimal or 0x hex · loaded into R0";
                 break;
             case TYPE_FLOAT:
-                s = is64
-                        ? "Encoded as a 64-bit double (IEEE-754) in X0"
-                        : "Encoded as a 32-bit single (IEEE-754) in R0";
+                s = is64 ? "64-bit double · loaded into X0" : "32-bit single · loaded into R0";
                 break;
             case TYPE_BOOLEAN:
                 s = "Returns 1 (true) or 0 (false)";
                 break;
             default:
-                s = "Generates a patch for every value from Start to End (max "
-                        + MAX_RANGE_ITEMS + " entries)";
+                s = "Start to End · max " + MAX_RANGE_ITEMS + " entries";
                 break;
         }
         helperText.setText(s);
+    }
+
+    /** Keeps the result card on screen while the keyboard is open. */
+    private void ensureOutputVisible() {
+        if (outer == null || outputCard == null || isRange(type)) {
+            return;
+        }
+        outer.post(() -> {
+            int bottom = outputCard.getBottom() + dp(12);
+            int visibleBottom = outer.getScrollY() + outer.getHeight();
+            if (bottom > visibleBottom) {
+                outer.smoothScrollTo(0, bottom - outer.getHeight());
+            }
+        });
     }
 
     private void rebuildQuickRow() {
