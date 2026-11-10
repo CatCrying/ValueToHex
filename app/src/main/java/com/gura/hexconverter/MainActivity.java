@@ -21,6 +21,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.Editable;
+import android.text.InputFilter;
 import android.text.InputType;
 import android.text.SpannableString;
 import android.text.Spanned;
@@ -35,30 +36,24 @@ import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.*;
-import java.math.BigDecimal;
-import java.math.BigInteger;
-import java.util.Locale;
 
 public class MainActivity extends Activity {
 
     // ── Types ───────────────────────────────────────────────────────
-    private static final String TYPE_INT = "INT";
-    private static final String TYPE_FLOAT = "Float";
-    private static final String TYPE_BOOLEAN = "Boolean";
-    private static final String TYPE_INT_RANGE = "INT Range";
-    private static final String TYPE_FLOAT_RANGE = "Float Range";
+    private static final String TYPE_INT = PatchEncoder.TYPE_INT;
+    private static final String TYPE_FLOAT = PatchEncoder.TYPE_FLOAT;
+    private static final String TYPE_BOOLEAN = PatchEncoder.TYPE_BOOLEAN;
+    private static final String TYPE_INT_RANGE = PatchEncoder.TYPE_INT_RANGE;
+    private static final String TYPE_FLOAT_RANGE = PatchEncoder.TYPE_FLOAT_RANGE;
     private static final String[] TYPES = {
             TYPE_INT, TYPE_FLOAT, TYPE_BOOLEAN, TYPE_INT_RANGE, TYPE_FLOAT_RANGE
     };
 
     // ── Limits ───────────────────────────────────────────────────────
-    private static final int MAX_RANGE_ITEMS = 10000;
     private static final int MAX_DISPLAY_LINES = 500;
-    private static final long MAX_UINT32 = 0xFFFFFFFFL;
-
-    // ── Fixed ARM words ──────────────────────────────────────────────
-    private static final byte[] ARM32_BX_LR = {0x1E, (byte) 0xFF, 0x2F, (byte) 0xE1};
-    private static final byte[] ARM64_RET = {(byte) 0xC0, 0x03, 0x5F, (byte) 0xD6};
+    /** Binder transactions (clipboard / share intents) fail above ~1 MB. */
+    private static final int MAX_SHARE_CHARS = 200000;
+    private static final int MAX_COPY_CHARS = 400000;
 
     // ── Layout constants ─────────────────────────────────────────────
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
@@ -114,7 +109,7 @@ public class MainActivity extends Activity {
         if (savedInstanceState != null) {
             is64 = savedInstanceState.getBoolean("is64", false);
             String t = savedInstanceState.getString("type", TYPE_INT);
-            type = t;
+            type = java.util.Arrays.asList(TYPES).contains(t) ? t : TYPE_INT;
             inputValue.setText(savedInstanceState.getString("input", ""));
             startValue.setText(savedInstanceState.getString("start", ""));
             endValue.setText(savedInstanceState.getString("end", ""));
@@ -515,7 +510,7 @@ public class MainActivity extends Activity {
                 s = "Returns 1 (true) or 0 (false)";
                 break;
             default:
-                s = "Start to End · max " + MAX_RANGE_ITEMS + " entries";
+                s = "Start to End · max " + PatchEncoder.MAX_RANGE_ITEMS + " entries";
                 break;
         }
         helperText.setText(s);
@@ -573,13 +568,22 @@ public class MainActivity extends Activity {
     }
 
     private void pasteFromClipboard() {
-        ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        if (cm != null && cm.hasPrimaryClip() && cm.getPrimaryClip().getItemCount() > 0) {
-            CharSequence cs = cm.getPrimaryClip().getItemAt(0).coerceToText(this);
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cm == null || !cm.hasPrimaryClip()) {
+                return;
+            }
+            ClipData clip = cm.getPrimaryClip();
+            if (clip == null || clip.getItemCount() == 0) {
+                return;
+            }
+            CharSequence cs = clip.getItemAt(0).coerceToText(this);
             if (cs != null) {
                 inputValue.setText(cs.toString().trim());
                 inputValue.setSelection(inputValue.getText().length());
             }
+        } catch (RuntimeException e) {
+            // Clipboard unavailable or access denied: nothing to paste.
         }
     }
 
@@ -597,28 +601,33 @@ public class MainActivity extends Activity {
             raw = boolSwitch.isChecked() ? "true" : "false";
         } else {
             raw = inputValue.getText().toString();
-            if (cleanInput(raw).isEmpty()) {
+            if (PatchEncoder.cleanInput(raw).isEmpty()) {
                 showEmpty("Type a value to see the patch bytes.");
                 return;
             }
         }
         try {
-            StringBuilder sb = new StringBuilder();
-            byte[] code = handleSingle(is64, type, raw, sb);
-            showSingleResult(code, sb.toString());
-        } catch (Exception e) {
+            byte[] code = PatchEncoder.encodeSingle(is64, type, raw);
+            showSingleResult(code, PatchEncoder.bytesToHex(code));
+        } catch (PatchEncoder.PatchException e) {
             showError(e.getMessage());
+        } catch (RuntimeException e) {
+            showError("Unexpected error: " + e.getClass().getSimpleName());
         }
     }
 
     private void onGenerate() {
         hideKeyboard();
-        StringBuilder sb = new StringBuilder();
         try {
-            handleRange(is64, type, sb);
-            showRangeResult(sb.toString().trim());
-        } catch (Exception e) {
+            String text = PatchEncoder.generateRange(is64, type,
+                    startValue.getText().toString(),
+                    endValue.getText().toString(),
+                    stepValue.getText().toString()).trim();
+            showRangeResult(text);
+        } catch (PatchEncoder.PatchException e) {
             showError(e.getMessage());
+        } catch (RuntimeException | OutOfMemoryError e) {
+            showError("Unexpected error: " + e.getClass().getSimpleName());
         }
     }
 
@@ -658,7 +667,7 @@ public class MainActivity extends Activity {
         currentCopyText = hex;
         setActionsEnabled(true);
 
-        asmText.setText(disassemble(code, is64));
+        asmText.setText(PatchEncoder.disassemble(code, is64));
         asmNote.setText(noteFor());
         asmCard.setVisibility(View.VISIBLE);
     }
@@ -709,8 +718,20 @@ public class MainActivity extends Activity {
         if (currentCopyText.isEmpty()) {
             return;
         }
-        ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        cm.setPrimaryClip(ClipData.newPlainText("hex_result", currentCopyText));
+        if (currentCopyText.length() > MAX_COPY_CHARS) {
+            Toast.makeText(this, "Result is too large to copy", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cm == null) {
+                throw new IllegalStateException("Clipboard unavailable");
+            }
+            cm.setPrimaryClip(ClipData.newPlainText("hex_result", currentCopyText));
+        } catch (RuntimeException e) {
+            Toast.makeText(this, "Could not copy to clipboard", Toast.LENGTH_SHORT).show();
+            return;
+        }
         copyBtn.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
         copyBtn.setText("COPIED ✓");
         handler.removeCallbacksAndMessages(null);
@@ -721,10 +742,18 @@ public class MainActivity extends Activity {
         if (currentCopyText.isEmpty()) {
             return;
         }
-        Intent i = new Intent(Intent.ACTION_SEND);
-        i.setType("text/plain");
-        i.putExtra(Intent.EXTRA_TEXT, currentCopyText);
-        startActivity(Intent.createChooser(i, "Share patch"));
+        if (currentCopyText.length() > MAX_SHARE_CHARS) {
+            Toast.makeText(this, "Too large to share. Use COPY instead", Toast.LENGTH_LONG).show();
+            return;
+        }
+        try {
+            Intent i = new Intent(Intent.ACTION_SEND);
+            i.setType("text/plain");
+            i.putExtra(Intent.EXTRA_TEXT, currentCopyText);
+            startActivity(Intent.createChooser(i, "Share patch"));
+        } catch (RuntimeException e) {
+            Toast.makeText(this, "Could not share the result", Toast.LENGTH_SHORT).show();
+        }
     }
 
     private void openTelegram() {
@@ -858,6 +887,7 @@ public class MainActivity extends Activity {
         et.setTextSize(18f);
         et.setTypeface(Typeface.MONOSPACE);
         et.setSingleLine(true);
+        et.setFilters(new InputFilter[]{new InputFilter.LengthFilter(PatchEncoder.MAX_INPUT_LENGTH)});
         et.setImeOptions(EditorInfo.IME_ACTION_DONE);
         if (numeric) {
             et.setInputType(InputType.TYPE_CLASS_NUMBER
@@ -871,302 +901,5 @@ public class MainActivity extends Activity {
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
-    }
-
-    // ── Disassembler (only the instructions this app emits) ──────────
-    private String disassemble(byte[] code, boolean sixtyFour) {
-        StringBuilder out = new StringBuilder();
-        for (int i = 0; i + 3 < code.length; i += 4) {
-            int w = (code[i] & 0xFF) | ((code[i + 1] & 0xFF) << 8)
-                    | ((code[i + 2] & 0xFF) << 16) | ((code[i + 3] & 0xFF) << 24);
-            String s;
-            if (!sixtyFour) {
-                int imm = (((w >>> 16) & 0xF) << 12) | (w & 0xFFF);
-                if (w == 0xE12FFF1E) {
-                    s = "BX LR";
-                } else if ((w & 0xFFF00000) == 0xE3000000) {
-                    s = "MOVW R0, #0x" + hexUpper(imm);
-                } else if ((w & 0xFFF00000) == 0xE3400000) {
-                    s = "MOVT R0, #0x" + hexUpper(imm);
-                } else {
-                    s = ".word 0x" + hexUpper(w);
-                }
-            } else {
-                int imm = (w >>> 5) & 0xFFFF;
-                int hw = (w >>> 21) & 3;
-                String shift = hw == 0 ? "" : ", LSL #" + (16 * hw);
-                if (w == 0xD65F03C0) {
-                    s = "RET";
-                } else if ((w & 0xFF800000) == 0xD2800000) {
-                    s = "MOVZ X0, #0x" + hexUpper(imm) + shift;
-                } else if ((w & 0xFF800000) == 0xF2800000) {
-                    s = "MOVK X0, #0x" + hexUpper(imm) + shift;
-                } else {
-                    s = ".word 0x" + hexUpper(w);
-                }
-            }
-            if (out.length() > 0) {
-                out.append('\n');
-            }
-            out.append(s);
-        }
-        return out.toString();
-    }
-
-    private String hexUpper(int v) {
-        return Integer.toHexString(v).toUpperCase(Locale.US);
-    }
-
-    // ── Conversion logic (kept in sync with the web tool) ────────────
-    private byte[] handleSingle(boolean is64, String type, String rawInput, StringBuilder sb) throws Exception {
-        String raw = cleanInput(rawInput);
-        byte[] bytes;
-
-        switch (type) {
-            case TYPE_INT:
-                bytes = encodeInt(parseIntegerInput(raw), is64);
-                break;
-
-            case TYPE_FLOAT:
-                bytes = encodeFloat(parseFloatInput(raw), is64);
-                break;
-
-            case TYPE_BOOLEAN:
-                bytes = encodeInt(parseBool(raw) ? BigInteger.ONE : BigInteger.ZERO, is64);
-                break;
-
-            default:
-                throw new Exception("Unknown type");
-        }
-
-        sb.append(bytesToHex(bytes));
-        return bytes;
-    }
-
-    private void handleRange(boolean is64, String type, StringBuilder sb) throws Exception {
-
-        String rs = startValue.getText().toString().trim();
-        String re = endValue.getText().toString().trim();
-        String rst = stepValue.getText().toString().trim();
-
-        if (rs.isEmpty() || re.isEmpty() || rst.isEmpty()) {
-            throw new Exception("Please fill all range fields!");
-        }
-
-        BigDecimal bdStart;
-        BigDecimal bdEnd;
-        BigDecimal bdStep;
-
-        try {
-            bdStart = new BigDecimal(rs);
-            bdEnd = new BigDecimal(re);
-            bdStep = new BigDecimal(rst);
-        } catch (Exception e) {
-            throw new Exception("Invalid number format");
-        }
-
-        if (bdStart.compareTo(bdEnd) >= 0) {
-            throw new Exception("Start value must be less than end value");
-        }
-
-        if (bdStep.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new Exception("Step size must be greater than 0");
-        }
-
-        BigDecimal count = bdEnd.subtract(bdStart).divideToIntegralValue(bdStep).add(BigDecimal.ONE);
-
-        if (count.compareTo(BigDecimal.valueOf(MAX_RANGE_ITEMS)) > 0) {
-            throw new Exception("Range too large (max " + MAX_RANGE_ITEMS + " entries)");
-        }
-
-        boolean isFloat = type.equals(TYPE_FLOAT_RANGE);
-
-        for (BigDecimal cur = bdStart; cur.compareTo(bdEnd) <= 0; cur = cur.add(bdStep)) {
-
-            try {
-
-                byte[] bytes;
-
-                if (isFloat) {
-
-                    bytes = encodeFloat(cur.doubleValue(), is64);
-
-                } else {
-
-                    BigInteger v;
-
-                    try {
-                        v = cur.toBigIntegerExact();
-                    } catch (ArithmeticException ex) {
-                        throw new Exception("Not a whole number");
-                    }
-
-                    bytes = encodeInt(v, is64);
-                }
-
-                sb.append(cur.stripTrailingZeros().toPlainString())
-                        .append(" = ")
-                        .append(bytesToHex(bytes))
-                        .append("\n");
-
-            } catch (Exception e) {
-
-                sb.append(cur.toPlainString()).append(" - ").append(e.getMessage()).append("\n");
-            }
-        }
-    }
-
-    // ── ARM32 INT: MOVW R0,#low16 [; MOVT R0,#high16 if non-zero] ; BX LR ──
-    private byte[] arm32Int(int value) {
-        long uval = value & 0xFFFFFFFFL;
-        int low16 = (int) (uval & 0xFFFF);
-        int high16 = (int) ((uval >> 16) & 0xFFFF);
-        int movw = 0xE3000000 | ((low16 >> 12) << 16) | (low16 & 0xFFF);
-        byte[] result = intToLE(movw);
-        if (high16 != 0) {
-            int movt = 0xE3400000 | ((high16 >> 12) << 16) | (high16 & 0xFFF);
-            result = concat(result, intToLE(movt));
-        }
-        return concat(result, ARM32_BX_LR);
-    }
-
-    // ── ARM32 Float: single-precision bits via MOVW (+MOVT) R0 ; BX LR ──
-    private byte[] arm32Float(float fval) {
-        return arm32Int(Float.floatToRawIntBits(fval));
-    }
-
-    // ── ARM64 INT: MOVZ X0,#val [+ MOVK...] ; RET ───────────────────
-    private byte[] arm64Int(long value) {
-        byte[] result = new byte[0];
-        boolean first = true;
-        for (int i = 0; i < 4; i++) {
-            int chunk = (int) ((value >> (i * 16)) & 0xFFFF);
-            if (first) {
-                // MOVZ X0, #chunk, LSL#(i*16)
-                int movz = 0xD2800000 | (i << 21) | (chunk << 5);
-                result = intToLE(movz);
-                first = false;
-            } else if (chunk != 0) {
-                // MOVK X0, #chunk, LSL#(i*16)
-                int movk = 0xF2800000 | (i << 21) | (chunk << 5);
-                result = concat(result, intToLE(movk));
-            }
-        }
-        if (first) {
-            // value == 0: MOVZ X0, #0
-            result = intToLE(0xD2800000);
-        }
-        return concat(result, ARM64_RET);
-    }
-
-    // ── ARM64 Float: double (64-bit IEEE-754) bits via MOVZ/MOVK X0 ; RET ──
-    private byte[] arm64Double(double d) {
-        return arm64Int(Double.doubleToRawLongBits(d));
-    }
-
-    // ── Вспомогательные методы ───────────────────────────────────────
-
-    /** Same input cleaning as the web tool: max 64 chars, strip zero-width chars, trim. */
-    private String cleanInput(String s) {
-        if (s.length() > 64) {
-            s = s.substring(0, 64);
-        }
-        return s.replaceAll("[\\u200B-\\u200D\\uFEFF]", "").trim();
-    }
-
-    /** Integer input: decimal or non-negative hex (0x..), same rules/messages as the web tool. */
-    private BigInteger parseIntegerInput(String t) throws Exception {
-        if (t.isEmpty()) {
-            throw new Exception("Input cannot be empty.");
-        }
-        if (t.matches("(?i)-?0x[0-9a-f]+")) {
-            if (t.startsWith("-")) {
-                throw new Exception("Failed to parse integer.");
-            }
-            return new BigInteger(t.substring(2), 16);
-        }
-        if (t.matches("-?[0-9]+")) {
-            return new BigInteger(t);
-        }
-        throw new Exception("Invalid integer format. Use decimal (e.g. 10) or hex (e.g. 0x0A).");
-    }
-
-    /** Float input parsed like JavaScript Number(): decimal/exponent, 0x/0b/0o forms. */
-    private double parseFloatInput(String t) throws Exception {
-        if (t.isEmpty()) {
-            throw new Exception("Input cannot be empty.");
-        }
-        double d = Double.NaN;
-        if (t.matches("0[xX][0-9a-fA-F]+")) {
-            d = new BigInteger(t.substring(2), 16).doubleValue();
-        } else if (t.matches("0[bB][01]+")) {
-            d = new BigInteger(t.substring(2), 2).doubleValue();
-        } else if (t.matches("0[oO][0-7]+")) {
-            d = new BigInteger(t.substring(2), 8).doubleValue();
-        } else if (t.matches("[+-]?([0-9]+\\.?[0-9]*|\\.[0-9]+)([eE][+-]?[0-9]+)?")) {
-            d = Double.parseDouble(t);
-        }
-        if (Double.isNaN(d) || Double.isInfinite(d)) {
-            throw new Exception("Invalid float value. NaN and Infinity are not allowed.");
-        }
-        return d;
-    }
-
-    private byte[] encodeInt(BigInteger v, boolean is64) throws Exception {
-        if (!is64) {
-            if (v.compareTo(BigInteger.valueOf(Integer.MIN_VALUE)) < 0
-                    || v.compareTo(BigInteger.valueOf(MAX_UINT32)) > 0) {
-                throw new Exception("Value exceeds 32-bit integer range (-2,147,483,648 to 4,294,967,295).");
-            }
-            return arm32Int(v.intValue());
-        }
-        BigInteger min = BigInteger.ONE.shiftLeft(63).negate();
-        BigInteger max = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
-        if (v.compareTo(min) < 0 || v.compareTo(max) > 0) {
-            throw new Exception("Value exceeds 64-bit integer range.");
-        }
-        return arm64Int(v.longValue());
-    }
-
-    /** ARM32: IEEE-754 single in R0. ARM64: IEEE-754 double in X0 (same as the web tool). */
-    private byte[] encodeFloat(double d, boolean is64) {
-        return is64 ? arm64Double(d) : arm32Float((float) d);
-    }
-
-    private boolean parseBool(String raw) throws Exception {
-        if (raw.equalsIgnoreCase("true") || raw.equals("1")) {
-            return true;
-        }
-
-        if (raw.equalsIgnoreCase("false") || raw.equals("0")) {
-            return false;
-        }
-
-        throw new Exception("Invalid boolean value. Use 1/true or 0/false");
-    }
-
-    private byte[] intToLE(int v) {
-        return new byte[]{(byte) (v), (byte) (v >> 8), (byte) (v >> 16), (byte) (v >> 24)};
-    }
-
-    private byte[] concat(byte[]... arrays) {
-        int len = 0;
-        for (byte[] a : arrays) len += a.length;
-        byte[] result = new byte[len];
-        int pos = 0;
-        for (byte[] a : arrays) {
-            System.arraycopy(a, 0, result, pos, a.length);
-            pos += a.length;
-        }
-        return result;
-    }
-
-    private String bytesToHex(byte[] bytes) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < bytes.length; i++) {
-            if (i > 0) sb.append(' ');
-            sb.append(String.format("%02X", bytes[i] & 0xFF));
-        }
-        return sb.toString();
     }
 }
