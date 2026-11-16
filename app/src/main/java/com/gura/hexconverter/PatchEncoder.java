@@ -2,6 +2,7 @@ package com.gura.hexconverter;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.util.regex.Pattern;
 
 /**
  * ARM32 / ARM64 patch encoder. Pure Java (no Android dependencies) so it can be unit tested.
@@ -31,6 +32,16 @@ public final class PatchEncoder {
     private static final byte[] ARM32_BX_LR = {0x1E, (byte) 0xFF, 0x2F, (byte) 0xE1};
     private static final byte[] ARM64_RET = {(byte) 0xC0, 0x03, 0x5F, (byte) 0xD6};
     private static final char[] HEX = "0123456789ABCDEF".toCharArray();
+
+    // Linear-time patterns (no overlapping quantifiers); compiled once.
+    private static final Pattern RE_HEX_INT = Pattern.compile("-?0x[0-9a-f]+", Pattern.CASE_INSENSITIVE);
+    private static final Pattern RE_DEC_INT = Pattern.compile("-?[0-9]+");
+    private static final Pattern RE_HEX_NUM = Pattern.compile("0[xX][0-9a-fA-F]+");
+    private static final Pattern RE_BIN_NUM = Pattern.compile("0[bB][01]+");
+    private static final Pattern RE_OCT_NUM = Pattern.compile("0[oO][0-7]+");
+    private static final Pattern RE_DEC_FLOAT =
+            Pattern.compile("[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+)?");
+    private static final Pattern RE_DECIMAL = Pattern.compile("[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)");
 
     private PatchEncoder() {
     }
@@ -113,8 +124,16 @@ public final class PatchEncoder {
         return sb.toString();
     }
 
+    /** Defence in depth: every parser rejects over-long input even if called directly. */
+    private static void requireShort(String s) throws PatchException {
+        if (s.length() > MAX_INPUT_LENGTH) {
+            throw new PatchException("Input too long (max " + MAX_INPUT_LENGTH + " characters).");
+        }
+    }
+
     private static BigDecimal parseDecimal(String s) throws PatchException {
-        if (!s.matches("[+-]?([0-9]+\\.?[0-9]*|\\.[0-9]+)")) {
+        requireShort(s);
+        if (!RE_DECIMAL.matcher(s).matches()) {
             throw new PatchException("Invalid number format");
         }
         return new BigDecimal(s);
@@ -200,16 +219,17 @@ public final class PatchEncoder {
 
     /** Integer input: decimal or non-negative hex (0x..), same rules/messages as the web tool. */
     public static BigInteger parseIntegerInput(String t) throws PatchException {
+        requireShort(t);
         if (t.isEmpty()) {
             throw new PatchException("Input cannot be empty.");
         }
-        if (t.matches("(?i)-?0x[0-9a-f]+")) {
+        if (RE_HEX_INT.matcher(t).matches()) {
             if (t.startsWith("-")) {
                 throw new PatchException("Failed to parse integer.");
             }
             return new BigInteger(t.substring(2), 16);
         }
-        if (t.matches("-?[0-9]+")) {
+        if (RE_DEC_INT.matcher(t).matches()) {
             return new BigInteger(t);
         }
         throw new PatchException("Invalid integer format. Use decimal (e.g. 10) or hex (e.g. 0x0A).");
@@ -217,17 +237,18 @@ public final class PatchEncoder {
 
     /** Float input parsed like JavaScript Number(): decimal/exponent, 0x/0b/0o forms. */
     public static double parseFloatInput(String t) throws PatchException {
+        requireShort(t);
         if (t.isEmpty()) {
             throw new PatchException("Input cannot be empty.");
         }
         double d = Double.NaN;
-        if (t.matches("0[xX][0-9a-fA-F]+")) {
+        if (RE_HEX_NUM.matcher(t).matches()) {
             d = new BigInteger(t.substring(2), 16).doubleValue();
-        } else if (t.matches("0[bB][01]+")) {
+        } else if (RE_BIN_NUM.matcher(t).matches()) {
             d = new BigInteger(t.substring(2), 2).doubleValue();
-        } else if (t.matches("0[oO][0-7]+")) {
+        } else if (RE_OCT_NUM.matcher(t).matches()) {
             d = new BigInteger(t.substring(2), 8).doubleValue();
-        } else if (t.matches("[+-]?([0-9]+\\.?[0-9]*|\\.[0-9]+)([eE][+-]?[0-9]+)?")) {
+        } else if (RE_DEC_FLOAT.matcher(t).matches()) {
             d = Double.parseDouble(t);
         }
         if (Double.isNaN(d) || Double.isInfinite(d)) {
@@ -238,6 +259,7 @@ public final class PatchEncoder {
 
     /** Boolean input: true/false/1/0 (case-insensitive). */
     public static boolean parseBool(String raw) throws PatchException {
+        requireShort(raw);
         if (raw.equalsIgnoreCase("true") || raw.equals("1")) {
             return true;
         }

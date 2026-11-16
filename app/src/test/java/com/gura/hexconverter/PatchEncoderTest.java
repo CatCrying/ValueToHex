@@ -223,4 +223,69 @@ public class PatchEncoderTest {
         assertEquals(single(true, "Float", sb.substring(0, 64)),
                 single(true, "Float", sb.toString() + "e9"));
     }
+
+    // ── Security / DoS hardening ─────────────────────────────────────
+
+    private static String repeat(String s, int n) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < n; i++) {
+            sb.append(s);
+        }
+        return sb.toString();
+    }
+
+    @Test
+    public void parsersRejectOverlongInputEvenWhenCalledDirectly() {
+        String longStr = repeat("1", PatchEncoder.MAX_INPUT_LENGTH + 1);
+        String msg = "Input too long (max 64 characters).";
+        assertEquals(msg, expectError(() -> PatchEncoder.parseIntegerInput(longStr)));
+        assertEquals(msg, expectError(() -> PatchEncoder.parseFloatInput(longStr)));
+        assertEquals(msg, expectError(() -> PatchEncoder.parseBool(longStr)));
+    }
+
+    @Test
+    public void adversarialInputsDoNotCauseSlowRegexMatching() {
+        // Strings that make ambiguous/nested regex quantifiers backtrack catastrophically.
+        String[] evil = {
+                repeat("1", 63) + "x",
+                repeat("1", 30) + "." + repeat("1", 30) + "!",
+                repeat("0", 63) + "e",
+                "0x" + repeat("f", 61) + "g",
+                repeat("-", 64),
+                repeat("1.", 32),
+        };
+        long t0 = System.nanoTime();
+        for (int i = 0; i < 3000; i++) {
+            for (String s : evil) {
+                for (String type : new String[]{"INT", "Float"}) {
+                    try {
+                        PatchEncoder.encodeSingle(i % 2 == 0, type, s);
+                    } catch (PatchException expected) {
+                        // fine
+                    }
+                }
+                try {
+                    PatchEncoder.generateRange(false, "Float Range", s, s, s);
+                } catch (PatchException expected) {
+                    // fine
+                }
+            }
+        }
+        assertTrue("regex handling too slow", (System.nanoTime() - t0) / 1_000_000 < 5000);
+    }
+
+    @Test
+    public void maxLengthNumbersStayBounded() throws Exception {
+        long t0 = System.nanoTime();
+        String huge = repeat("9", 64);
+        String tiny = "0." + repeat("0", 61) + "1";
+        // 10^64 / 10^-62 entries: must be rejected by the size cap, quickly.
+        assertEquals("Range too large (max 10000 entries)",
+                expectError(() -> PatchEncoder.generateRange(true, "Float Range", "0", huge, tiny)));
+        // Tiny but valid: 10 entries of very high precision.
+        String end = "0." + repeat("0", 61) + "9";
+        String out = PatchEncoder.generateRange(true, "Float Range", tiny, end, tiny);
+        assertEquals(9, out.split("\n").length);
+        assertTrue("took too long", (System.nanoTime() - t0) / 1_000_000 < 2000);
+    }
 }

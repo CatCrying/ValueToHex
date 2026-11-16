@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Keep pinned GitHub Actions (full-SHA) up to date
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Gradle wrapper, Android Gradle Plugin and dependencies
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"

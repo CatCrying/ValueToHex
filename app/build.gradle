@@ -3,13 +3,13 @@ plugins {
 }
 
 android {
-    compileSdk 33
+    compileSdk 34
     namespace "com.gura.hexconverter"
 
     defaultConfig {
         applicationId "com.gura.hexconverter"
         minSdk 19
-        targetSdk 33
+        targetSdk 34
         versionCode 2
         versionName "2.0"
     }
