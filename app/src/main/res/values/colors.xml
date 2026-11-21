@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="app_bg">#FFF6F7FB</color>
-    <color name="accent">#FF5B5BF0</color>
+    <color name="app_bg">#FF0E1015</color>
+    <color name="accent">#FF8C8CFF</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
 </resources>

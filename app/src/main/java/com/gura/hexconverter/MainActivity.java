@@ -8,7 +8,6 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.ColorStateList;
-import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
@@ -68,7 +67,6 @@ public class MainActivity extends Activity {
     private static final int RET_COLOR = 0xFFE0AF68;
 
     // ── Theme colors (set in initColors) ─────────────────────────────
-    private boolean dark;
     private int cBg, cSurface, cSurfaceAlt, cText, cMuted, cPrimary, cOnPrimary, cOutline;
 
     // ── State ────────────────────────────────────────────────────────
@@ -99,8 +97,6 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        dark = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
-                == Configuration.UI_MODE_NIGHT_YES;
         initColors();
         applySystemBars();
         buildUi();
@@ -141,26 +137,16 @@ public class MainActivity extends Activity {
     }
 
     // ── Theme ────────────────────────────────────────────────────────
+    /** The app is dark-only: it ignores the system light/dark setting. */
     private void initColors() {
-        if (dark) {
-            cBg = 0xFF0E1015;
-            cSurface = 0xFF171A22;
-            cSurfaceAlt = 0xFF222736;
-            cText = 0xFFECEEF5;
-            cMuted = 0xFF9AA1B5;
-            cPrimary = 0xFF8C8CFF;
-            cOnPrimary = 0xFF10121A;
-            cOutline = 0xFF2C3243;
-        } else {
-            cBg = 0xFFF6F7FB;
-            cSurface = 0xFFFFFFFF;
-            cSurfaceAlt = 0xFFEEF0F7;
-            cText = 0xFF14161C;
-            cMuted = 0xFF5B6070;
-            cPrimary = 0xFF5B5BF0;
-            cOnPrimary = 0xFFFFFFFF;
-            cOutline = 0xFFDADDE8;
-        }
+        cBg = 0xFF0E1015;
+        cSurface = 0xFF171A22;
+        cSurfaceAlt = 0xFF222736;
+        cText = 0xFFECEEF5;
+        cMuted = 0xFF9AA1B5;
+        cPrimary = 0xFF8C8CFF;
+        cOnPrimary = 0xFF10121A;
+        cOutline = 0xFF2C3243;
     }
 
     private void applySystemBars() {
@@ -170,17 +156,7 @@ public class MainActivity extends Activity {
             w.setStatusBarColor(cBg);
             w.setNavigationBarColor(cBg);
         }
-        View decor = w.getDecorView();
-        int flags = decor.getSystemUiVisibility();
-        if (!dark) {
-            if (Build.VERSION.SDK_INT >= 23) {
-                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-            }
-            if (Build.VERSION.SDK_INT >= 26) {
-                flags |= 0x00000010; // SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-            }
-        }
-        decor.setSystemUiVisibility(flags);
+        // Dark bars: keep the default light status/navigation bar icons.
     }
 
     // ── UI construction ──────────────────────────────────────────────

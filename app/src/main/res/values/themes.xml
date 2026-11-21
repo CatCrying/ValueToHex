@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- API 19-20: Holo, UI is drawn in code -->
-    <style name="Theme.ValueToHex" parent="android:Theme.Holo.Light.NoActionBar">
+    <!-- Dark only (API 19-20). The UI itself is drawn in code. -->
+    <style name="Theme.ValueToHex" parent="android:Theme.Holo.NoActionBar">
         <item name="android:windowBackground">@color/app_bg</item>
     </style>
 </resources>
